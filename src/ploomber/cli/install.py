@@ -20,6 +20,7 @@ _ENV_YML = 'environment.yml'
 _ENV_LOCK_YML = 'environment.lock.yml'
 
 
+# TODO: add inline parameter to force install in the current environment
 def main(use_lock):
     """
     Install project, automatically detecting if it's a conda-based or pip-based
@@ -82,14 +83,16 @@ def main(use_lock):
                           })
         raise exceptions.ClickException(err)
     elif HAS_CONDA and use_lock and HAS_ENV_LOCK_YML:
-        main_conda(start_time, use_lock=True)
+        main_conda(start_time, use_lock=True, create_env=_create_conda_env())
     elif HAS_CONDA and not use_lock and HAS_ENV_YML:
-        main_conda(start_time, use_lock=False)
+        main_conda(start_time, use_lock=False, create_env=_create_conda_env())
     else:
-        main_pip(start_time, use_lock=use_lock)
+        main_pip(start_time,
+                 use_lock=use_lock,
+                 create_env=not telemetry.in_virtualenv())
 
 
-def main_pip(start_time, use_lock):
+def main_pip(start_time, use_lock, create_env=True):
     """
     Install pip-based project (uses venv), looks for requirements.txt files
 
@@ -97,8 +100,14 @@ def main_pip(start_time, use_lock):
     ----------
     start_time : datetime
         The initial runtime of the function.
+
     use_lock : bool
         If True Uses requirements.txt and requirements.dev.lock.txt files
+
+    create_env : bool
+        If True, it uses the venv module to create a new virtual environment,
+        then installs the dependencies, otherwise it installs the dependencies
+        in the current environment
     """
     reqs_txt = _REQS_LOCK_TXT if use_lock else _REQS_TXT
     reqs_dev_txt = ('requirements.dev.lock.txt'
@@ -109,19 +118,30 @@ def main_pip(start_time, use_lock):
     # TODO: modify readme to add how to activate env? probably also in conda
     name = Path('.').resolve().name
 
-    venv_dir = f'venv-{name}'
-    cmdr.run('python', '-m', 'venv', venv_dir, description='Creating venv')
+    if create_env:
+        venv_dir = f'venv-{name}'
+        cmdr.print('Creating venv...')
+        cmdr.run('python', '-m', 'venv', venv_dir, description='Creating venv')
 
-    # add venv_dir to .gitignore if it doesn't exist
-    if Path('.gitignore').exists():
-        with open('.gitignore') as f:
-            if venv_dir not in f.read():
-                cmdr.append_inline(venv_dir, '.gitignore')
+        # add venv_dir to .gitignore if it doesn't exist
+        if Path('.gitignore').exists():
+            with open('.gitignore') as f:
+                if venv_dir not in f.read():
+                    cmdr.append_inline(venv_dir, '.gitignore')
+        else:
+            cmdr.append_inline(venv_dir, '.gitignore')
+
+        folder, bin_name = _get_pip_folder_and_bin_name()
+        pip = str(Path(venv_dir, folder, bin_name))
+
+        if os.name == 'nt':
+            cmd_activate = f'{venv_dir}\\Scripts\\Activate.ps1'
+        else:
+            cmd_activate = f'source {venv_dir}/bin/activate'
     else:
-        cmdr.append_inline(venv_dir, '.gitignore')
-
-    folder, bin_name = _get_pip_folder_and_bin_name()
-    pip = str(Path(venv_dir, folder, bin_name))
+        cmdr.print('Installing in current venv...')
+        pip = 'pip'
+        cmd_activate = None
 
     if Path(_SETUP_PY).exists():
         _pip_install_setup_py_pip(cmdr, pip)
@@ -131,15 +151,10 @@ def main_pip(start_time, use_lock):
     if Path(reqs_dev_txt).exists():
         _pip_install(cmdr, pip, lock=not use_lock, requirements=reqs_dev_txt)
 
-    if os.name == 'nt':
-        cmd_activate = f'{venv_dir}\\Scripts\\Activate.ps1'
-    else:
-        cmd_activate = f'source {venv_dir}/bin/activate'
-
     _next_steps(cmdr, cmd_activate, start_time)
 
 
-def main_conda(start_time, use_lock):
+def main_conda(start_time, use_lock, create_env=True):
     """
     Install conda-based project, looks for environment.yml files
 
@@ -147,8 +162,15 @@ def main_conda(start_time, use_lock):
     ----------
     start_time : datetime
         The initial runtime of the function.
+
     use_lock : bool
         If True Uses environment.lock.yml and environment.dev.lock.yml files
+
+
+    create_env : bool
+        If True, it uses the venv module to create a new virtual environment,
+        then installs the dependencies, otherwise it installs the dependencies
+        in the current environment
     """
     env_yml = _ENV_LOCK_YML if use_lock else _ENV_YML
 
@@ -158,22 +180,25 @@ def main_conda(start_time, use_lock):
 
     # TODO: provide helpful error messages on each command
 
-    with open(env_yml) as f:
-        env_name = yaml.safe_load(f)['name']
+    if create_env:
+        with open(env_yml) as f:
+            env_name = yaml.safe_load(f)['name']
 
-    current_env = Path(shutil.which('python')).parents[1].name
+        current_env = _current_conda_env_name()
 
-    if env_name == current_env:
-        err = (f'{env_yml} will create an environment '
-               f'named {env_name!r}, which is the current active '
-               'environment. Move to a different one and try '
-               'again (e.g., "conda activate base")')
-        telemetry.log_api("install-error",
-                          metadata={
-                              'type': 'env_running_conflict',
-                              'exception': err
-                          })
-        raise RuntimeError(err)
+        if env_name == current_env:
+            err = (f'{env_yml} will create an environment '
+                   f'named {env_name!r}, which is the current active '
+                   'environment. Move to a different one and try '
+                   'again (e.g., "conda activate base")')
+            telemetry.log_api("install-error",
+                              metadata={
+                                  'type': 'env_running_conflict',
+                                  'exception': err
+                              })
+            raise RuntimeError(err)
+    else:
+        env_name = _current_conda_env_name()
 
     # get current installed envs
     conda = shutil.which('conda')
@@ -182,7 +207,7 @@ def main_conda(start_time, use_lock):
     # if already installed and running on windows, ask to delete first,
     # otherwise it might lead to an intermittent error (permission denied
     # on vcruntime140.dll)
-    if os.name == 'nt':
+    if os.name == 'nt' and create_env:
         envs = cmdr.run(conda, 'env', 'list', '--json', capture_output=True)
         already_installed = any([
             env for env in json.loads(envs)['envs']
@@ -202,13 +227,26 @@ def main_conda(start_time, use_lock):
             raise ValueError(err)
 
     pkg_manager = mamba if mamba else conda
-    cmdr.run(pkg_manager,
-             'env',
-             'create',
-             '--file',
-             env_yml,
-             '--force',
-             description='Creating env')
+
+    if create_env:
+        cmdr.print('Creating conda env...')
+        cmdr.run(pkg_manager,
+                 'env',
+                 'create',
+                 '--file',
+                 env_yml,
+                 '--force',
+                 description='Creating env')
+    else:
+        cmdr.print('Installing in current conda env...')
+        cmdr.run(pkg_manager,
+                 'env',
+                 'update',
+                 '--file',
+                 env_yml,
+                 '--name',
+                 env_name,
+                 description='Installing dependencies')
 
     if Path(_SETUP_PY).exists():
         _pip_install_setup_py_conda(cmdr, env_name)
@@ -229,8 +267,19 @@ def main_conda(start_time, use_lock):
                                     env_name,
                                     use_lock=use_lock)
 
-    cmd_activate = f'conda activate {env_name}'
+    cmd_activate = (f'conda activate {env_name}' if create_env else None)
     _next_steps(cmdr, cmd_activate, start_time)
+
+
+def _create_conda_env():
+    # not in conda env or running in base conda env
+    return (not telemetry.is_conda()
+            or (telemetry.is_conda() and _current_conda_env_name() == 'base'))
+
+
+def _current_conda_env_name():
+    # NOTE: we can also use env variable: 'CONDA_DEFAULT_ENV'
+    return Path(shutil.which('python')).parents[1].name
 
 
 def _get_pip_folder_and_bin_name():
@@ -310,6 +359,8 @@ def _try_conda_install_and_lock_dev(cmdr, pkg_manager, env_name, use_lock):
                  'update',
                  '--file',
                  env_yml,
+                 '--name',
+                 env_name,
                  description='Installing dev dependencies')
 
         if not use_lock:
@@ -330,12 +381,26 @@ def _next_steps(cmdr, cmd_activate, start_time):
                       total_runtime=str(end_time - start_time))
 
     cmdr.success('Next steps')
-    cmdr.print((f'$ {cmd_activate}\n'
-                '$ ploomber build'))
+
+    message = f'$ {cmd_activate}' if cmd_activate else ''
+    cmdr.print((f'{message}\n$ ploomber build'))
     cmdr.success()
 
 
 def _pip_install(cmdr, pip, lock, requirements=_REQS_TXT):
+    """Install and freeze requirements
+
+    Parameters
+    ----------
+    cmdr
+        Commander instance
+
+    pip
+        Path to pip binary
+
+    lock
+        If true, locks dependencies and stores them in a requirements.lock.txt
+    """
     cmdr.run(pip,
              'install',
              '--requirement',
