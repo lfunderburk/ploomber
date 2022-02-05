@@ -1,3 +1,13 @@
+"""
+Implementation of:
+
+$ plomber install
+
+This command runs a bunch of pip/conda commands (depending on what's available)
+and it does the *right thing*: creating a new environment if needed, and
+locking dependencies.
+"""
+
 import json
 import os
 import shutil
@@ -20,6 +30,7 @@ _ENV_YML = 'environment.yml'
 _ENV_LOCK_YML = 'environment.lock.yml'
 
 
+# TODO: document the new options
 # TODO: add inline parameter to force install in the current environment
 def main(use_lock):
     """
@@ -121,7 +132,13 @@ def main_pip(start_time, use_lock, create_env=True):
     if create_env:
         venv_dir = f'venv-{name}'
         cmdr.print('Creating venv...')
-        cmdr.run('python', '-m', 'venv', venv_dir, description='Creating venv')
+        # NOTE: explicitly call 'python3'. in some systems 'python' is
+        # Python 2, which doesn't have the venv module
+        cmdr.run('python3',
+                 '-m',
+                 'venv',
+                 venv_dir,
+                 description='Creating venv')
 
         # add venv_dir to .gitignore if it doesn't exist
         if Path('.gitignore').exists():
@@ -279,7 +296,7 @@ def _create_conda_env():
 
 def _current_conda_env_name():
     # NOTE: we can also use env variable: 'CONDA_DEFAULT_ENV'
-    return Path(shutil.which('python')).parents[1].name
+    return Path(shutil.which('python3')).parents[1].name
 
 
 def _get_pip_folder_and_bin_name():
