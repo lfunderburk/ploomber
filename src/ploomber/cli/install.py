@@ -30,9 +30,10 @@ _ENV_YML = 'environment.yml'
 _ENV_LOCK_YML = 'environment.lock.yml'
 
 
+# FIXME: add an option to create missing dependencies file
+# "ploomber install --add"
 # TODO: document the new options
-# TODO: add inline parameter to force install in the current environment
-def main(use_lock):
+def main(use_lock, create_env=None):
     """
     Install project, automatically detecting if it's a conda-based or pip-based
     project.
@@ -41,19 +42,31 @@ def main(use_lock):
     ---------
     use_lock : bool
         If True Uses requirements.lock.txt/environment.lock.yml and
-        requirements.dev.lock.txt/environment.dev.lock.yml files. Otherwise
-        it uses regular files and creates the lock ones after installing
-        dependencies
+        requirements.dev.lock.txt/environment.dev.lock.yml files. If False
+        uses regular files and creates the lock ones after installing
+        dependencies. If None, it uses lock files if they exist, if they don't
+        it uses regular files
+
+    create_env : bool, default=None
+        If True, creates a new environment, if False, it installs in the
+        current environment. If None, it creates a new environment if there
+        isn't one already active
     """
     start_time = datetime.datetime.now()
     telemetry.log_api("install-started")
-    HAS_CONDA = shutil.which('conda')
-    HAS_ENV_YML = Path(_ENV_YML).exists()
-    HAS_ENV_LOCK_YML = Path(_ENV_LOCK_YML).exists()
-    HAS_REQS_TXT = Path(_REQS_TXT).exists()
-    HAS_REQS_LOCK_TXT = Path(_REQS_LOCK_TXT).exists()
+    CONDA_INSTALLED = shutil.which('conda')
+    ENV_YML_EXISTS = Path(_ENV_YML).exists()
+    ENV_LOCK_YML_EXISTS = Path(_ENV_LOCK_YML).exists()
+    REQS_TXT_EXISTS = Path(_REQS_TXT).exists()
+    REQS_LOCK_TXT_EXISTS = Path(_REQS_LOCK_TXT).exists()
 
-    if use_lock and not HAS_ENV_LOCK_YML and not HAS_REQS_LOCK_TXT:
+    if use_lock is None:
+        if CONDA_INSTALLED:
+            use_lock = ENV_LOCK_YML_EXISTS
+        else:
+            use_lock = REQS_LOCK_TXT_EXISTS
+
+    if use_lock and not ENV_LOCK_YML_EXISTS and not REQS_LOCK_TXT_EXISTS:
         err = ("Expected and environment.lock.yaml "
                "(conda) or requirements.lock.txt (pip) in the current "
                "directory. Add one of them and try again.")
@@ -63,7 +76,7 @@ def main(use_lock):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif not use_lock and not HAS_ENV_YML and not HAS_REQS_TXT:
+    elif not use_lock and not ENV_YML_EXISTS and not REQS_TXT_EXISTS:
         err = ("Expected an environment.yaml (conda)"
                " or requirements.txt (pip) in the current directory."
                " Add one of them and try again.")
@@ -73,8 +86,8 @@ def main(use_lock):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif (not HAS_CONDA and use_lock and HAS_ENV_LOCK_YML
-          and not HAS_REQS_LOCK_TXT):
+    elif (not CONDA_INSTALLED and use_lock and ENV_LOCK_YML_EXISTS
+          and not REQS_LOCK_TXT_EXISTS):
         err = ("Found env environment.lock.yaml "
                "but conda is not installed. Install conda or add a "
                "requirements.lock.txt to use pip instead")
@@ -84,7 +97,8 @@ def main(use_lock):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif not HAS_CONDA and not use_lock and HAS_ENV_YML and not HAS_REQS_TXT:
+    elif (not CONDA_INSTALLED and not use_lock and ENV_YML_EXISTS
+          and not REQS_TXT_EXISTS):
         err = ("Found environment.yaml but conda is not installed."
                " Install conda or add a requirements.txt to use pip instead")
         telemetry.log_api("install-error",
@@ -93,14 +107,24 @@ def main(use_lock):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif HAS_CONDA and use_lock and HAS_ENV_LOCK_YML:
-        main_conda(start_time, use_lock=True, create_env=_create_conda_env())
-    elif HAS_CONDA and not use_lock and HAS_ENV_YML:
-        main_conda(start_time, use_lock=False, create_env=_create_conda_env())
+    elif CONDA_INSTALLED and use_lock and ENV_LOCK_YML_EXISTS:
+        # TODO: emit warnings of unused requirements.txt?
+        main_conda(start_time,
+                   use_lock=True,
+                   create_env=create_env
+                   if create_env is not None else _create_conda_env())
+    elif CONDA_INSTALLED and not use_lock and ENV_YML_EXISTS:
+        # TODO: emit warnings of unused requirements.txt?
+        main_conda(start_time,
+                   use_lock=False,
+                   create_env=create_env
+                   if create_env is not None else _create_conda_env())
     else:
+        # TODO: emit warnings of unused environment.yml?
         main_pip(start_time,
                  use_lock=use_lock,
-                 create_env=not telemetry.in_virtualenv())
+                 create_env=create_env
+                 if create_env is not None else not telemetry.in_virtualenv())
 
 
 def main_pip(start_time, use_lock, create_env=True):
