@@ -280,6 +280,6 @@ def test_error_if_entry_point_and_name():
                            catch_exceptions=False)
 
     assert result.exit_code
-    expected = (f'Error: -e/--entry-point is not compatible with '
+    expected = ('Error: -e/--entry-point is not compatible with '
                 'the "name" argument\n')
     assert expected == result.output
