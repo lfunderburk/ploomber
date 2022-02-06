@@ -44,7 +44,7 @@ _PYTHON_BIN_NAME = _python_bin()
 # FIXME: add an option to create missing dependencies file
 # "ploomber install --add"
 # TODO: document the new options
-def main(use_lock, create_env=None):
+def main(use_lock, create_env=None, use_venv=False):
     """
     Install project, automatically detecting if it's a conda-based or pip-based
     project.
@@ -62,17 +62,20 @@ def main(use_lock, create_env=None):
         If True, creates a new environment, if False, it installs in the
         current environment. If None, it creates a new environment if there
         isn't one already active
+
+    use_venv : bool, default=False
+        Force to use Python's venv module, ignoring conda if installed
     """
     start_time = datetime.datetime.now()
     telemetry.log_api("install-started")
-    CONDA_INSTALLED = shutil.which('conda')
+    USE_CONDA = shutil.which('conda') and not use_venv
     ENV_YML_EXISTS = Path(_ENV_YML).exists()
     ENV_LOCK_YML_EXISTS = Path(_ENV_LOCK_YML).exists()
     REQS_TXT_EXISTS = Path(_REQS_TXT).exists()
     REQS_LOCK_TXT_EXISTS = Path(_REQS_LOCK_TXT).exists()
 
     if use_lock is None:
-        if CONDA_INSTALLED:
+        if USE_CONDA:
             use_lock = ENV_LOCK_YML_EXISTS
         else:
             use_lock = REQS_LOCK_TXT_EXISTS
@@ -97,7 +100,7 @@ def main(use_lock, create_env=None):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif (not CONDA_INSTALLED and use_lock and ENV_LOCK_YML_EXISTS
+    elif (not USE_CONDA and use_lock and ENV_LOCK_YML_EXISTS
           and not REQS_LOCK_TXT_EXISTS):
         err = ("Found env environment.lock.yaml "
                "but conda is not installed. Install conda or add a "
@@ -108,7 +111,7 @@ def main(use_lock, create_env=None):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif (not CONDA_INSTALLED and not use_lock and ENV_YML_EXISTS
+    elif (not USE_CONDA and not use_lock and ENV_YML_EXISTS
           and not REQS_TXT_EXISTS):
         err = ("Found environment.yaml but conda is not installed."
                " Install conda or add a requirements.txt to use pip instead")
@@ -118,13 +121,13 @@ def main(use_lock, create_env=None):
                               'exception': err
                           })
         raise exceptions.ClickException(err)
-    elif CONDA_INSTALLED and use_lock and ENV_LOCK_YML_EXISTS:
+    elif USE_CONDA and use_lock and ENV_LOCK_YML_EXISTS:
         # TODO: emit warnings of unused requirements.txt?
         main_conda(start_time,
                    use_lock=True,
                    create_env=create_env
                    if create_env is not None else _should_create_conda_env())
-    elif CONDA_INSTALLED and not use_lock and ENV_YML_EXISTS:
+    elif USE_CONDA and not use_lock and ENV_YML_EXISTS:
         # TODO: emit warnings of unused requirements.txt?
         main_conda(start_time,
                    use_lock=False,
